@@ -1,0 +1,25 @@
+  __pycache__/
+  *.pyc
+  .pytest_cache/
+  .venv/
+  *.egg-info/
+  .DS_Store
+  EOF
+
+  git rm -r --cached __pycache__ tests/__pycache__ src/synth_tool/__pycache__ src/synth_tool.egg-info
+  find . -type d -name "__pycache__" -prune -exec rm -rf {} +
+  find . -name "*.pyc" -delete
+
+  git add .gitignore
+  git commit -m "chore: remove cache files and add gitignore"
+  git push
+
+
+ EOF
+  git rm -r --cached __pycache__ tests/__pycache__ src/synth_tool/__pycache__ src/synth_tool.egg-info
+  find . -type d -name "__pycache__" -prune -exec rm -rf {} +
+  find . -name "*.pyc" -delete
+
+  git add .gitignore
+  git commit -m "chore: remove cache files and add gitignore"
+  git push
