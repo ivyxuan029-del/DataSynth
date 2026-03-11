@@ -25,6 +25,8 @@ _JOB_DIR = Path("generated_tools_output") / "jobs"
 
 if "input_mode" not in st.session_state:
     st.session_state.input_mode = "fuzzy"
+if "last_input_mode" not in st.session_state:
+    st.session_state.last_input_mode = st.session_state.input_mode
 if "fuzzy_requirement" not in st.session_state:
     st.session_state.fuzzy_requirement = (
         "生成电商订单表和客户表，还有join后的表，两个表要能join，joinkey是*ID，"
@@ -110,6 +112,15 @@ st.session_state.input_mode = st.radio(
     format_func=lambda x: "模糊描述" if x == "fuzzy" else "YAML 配置",
     horizontal=True,
 )
+
+if st.session_state.input_mode != st.session_state.last_input_mode:
+    st.session_state.pipeline_message = ""
+    st.session_state.generated_code = ""
+    st.session_state.output_path = ""
+    st.session_state.generated_files_map = {}
+    st.session_state.generation_time_sec = None
+    st.session_state.current_job_id = ""
+    st.session_state.last_input_mode = st.session_state.input_mode
 
 if st.session_state.input_mode == "fuzzy":
     st.session_state.fuzzy_requirement = st.text_area(
