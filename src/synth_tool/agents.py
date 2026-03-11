@@ -53,13 +53,21 @@ class PythonCodeGenAgent:
         system_prompt = (
             "You generate Python code for realistic synthetic tabular data.\n"
             "Return only Python code. No markdown.\n"
-            "Code must produce variable `rows` as list[dict].\n"
+            "If requirement implies a single table, produce variable `rows` as list[dict].\n"
+            "If requirement includes multiple tables or join relations, produce variable `tables` as dict[str, list[dict]].\n"
+            "You must define either `rows` or `tables` (never omit both).\n"
+            "For multi-table joins, ensure join keys are consistent and actually match across related tables.\n"
+            "If relationships are provided (joins/relationships), create join result tables named "
+            "`join_<left_table>__<right_table>__<join_key>` for each relationship.\n"
+            "Avoid index errors: never index a list by a fixed range without checking its length.\n"
+            "When building name lists, ensure the list length matches the intended row count (pad or sample safely).\n"
+            "Join keys must be explicit columns (e.g., customer_id) and used consistently across base and joined tables.\n"
             "Use varied and realistic values, avoid trivial repeated values like 1,2,3,4,5 for all fields.\n"
             "IDs can be sequential, but names, categories, amounts, dates should be diverse.\n"
             "Use only Python stdlib.\n"
             "Do NOT use file I/O: no `open`, no writing files, no reading files.\n"
             "Do NOT use network/system calls.\n"
-            "Do NOT print CSV text; only construct `rows`.\n"
+            "Do NOT print CSV text; only construct `rows` or `tables`.\n"
         )
         user_prompt = (
             f"Requirement: {requirement}\n"
@@ -89,6 +97,14 @@ class PythonCodeGenAgent:
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
             return CodeGenResult(success=False, message=f"CodeGen API HTTP error: {exc.code}, {detail}")
+        except UnicodeEncodeError as exc:
+            return CodeGenResult(
+                success=False,
+                message=(
+                    "CodeGen API request failed: header encoding error. "
+                    "Please ensure API Key and headers contain only ASCII characters."
+                ),
+            )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             return CodeGenResult(success=False, message=f"CodeGen API request failed: {exc}")
 
@@ -136,22 +152,43 @@ class CsvGenerationPipelineAgent:
         if not file_name.strip():
             return AgentPipelineResult(success=False, message="Missing file_name")
 
-        codegen = self.codegen_agent.run(requirement=requirement, file_name=file_name)
-        if not codegen.success:
-            return AgentPipelineResult(success=False, message=codegen.message)
+        attempts = 3
+        last_codegen: CodeGenResult | None = None
+        last_exec: ToolResult | None = None
+        last_msg = ""
 
-        exec_result = self.execution_agent.run(code=codegen.code, file_name=file_name)
-        if not exec_result.success:
+        for idx in range(1, attempts + 1):
+            prompt = requirement
+            if idx > 1 and last_msg:
+                prompt = (
+                    requirement
+                    + "\nPrevious attempt failed with error:\n"
+                    + last_msg
+                    + "\nPlease fix the Python code and ensure it defines `rows` or `tables`."
+                )
+
+            codegen = self.codegen_agent.run(requirement=prompt, file_name=file_name)
+            last_codegen = codegen
+            if not codegen.success:
+                last_msg = codegen.message
+                continue
+
+            exec_result = self.execution_agent.run(code=codegen.code, file_name=file_name)
+            last_exec = exec_result
+            if not exec_result.success:
+                last_msg = exec_result.message
+                continue
+
             return AgentPipelineResult(
-                success=False,
-                message=exec_result.message,
+                success=True,
+                message="AI agents generated CSV successfully",
                 code=codegen.code,
                 tool_result=exec_result,
             )
 
         return AgentPipelineResult(
-            success=True,
-            message="AI agents generated CSV successfully",
-            code=codegen.code,
-            tool_result=exec_result,
+            success=False,
+            message=last_msg or "AI pipeline failed after retries",
+            code=last_codegen.code if last_codegen else "",
+            tool_result=last_exec,
         )
