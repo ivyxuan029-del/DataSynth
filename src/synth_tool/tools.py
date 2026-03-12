@@ -70,6 +70,8 @@ class ExecutePythonToCsvTool:
             "io",
             "json",
             "re",
+            "typing",
+            "_strptime",
         }
 
     def _safe_import(self, name: str, globals_=None, locals_=None, fromlist=(), level: int = 0):

@@ -18,6 +18,13 @@ class CodeGenResult:
 
 
 @dataclass
+class KeywordExtractResult:
+    success: bool
+    message: str
+    keywords: list[str] = None
+
+
+@dataclass
 class AgentPipelineResult:
     success: bool
     message: str
@@ -62,6 +69,8 @@ class PythonCodeGenAgent:
             "Avoid index errors: never index a list by a fixed range without checking its length.\n"
             "When building name lists, ensure the list length matches the intended row count (pad or sample safely).\n"
             "Join keys must be explicit columns (e.g., customer_id) and used consistently across base and joined tables.\n"
+            "Preserve join key values exactly; do NOT renumber or normalize IDs.\n"
+            "If IDs are strings with prefixes (e.g., c000001), keep the same format in join tables.\n"
             "Use varied and realistic values, avoid trivial repeated values like 1,2,3,4,5 for all fields.\n"
             "IDs can be sequential, but names, categories, amounts, dates should be diverse.\n"
             "Use only Python stdlib.\n"
@@ -117,6 +126,84 @@ class PythonCodeGenAgent:
         if not code:
             return CodeGenResult(success=False, message="CodeGen API returned empty code")
         return CodeGenResult(success=True, message="Code generated", code=code)
+
+
+class KeywordExtractAgent:
+    """
+    Agent 0: requirement -> keywords
+    """
+
+    def __init__(self, cfg: DeepagentConfig):
+        self.cfg = cfg
+
+    def _chat_completions_url(self) -> str:
+        if self.cfg.base_url:
+            base = self.cfg.base_url.rstrip("/")
+            if base.endswith("/chat/completions"):
+                return base
+            return f"{base}/chat/completions"
+        return "https://api.openai.com/v1/chat/completions"
+
+    def _build_prompt(self, requirement: str) -> list[dict[str, str]]:
+        system_prompt = (
+            "Extract 3-5 concise English search keywords for a Kaggle dataset.\n"
+            "Return ONLY a JSON array of strings, no markdown.\n"
+            "Prefer domain nouns (e.g., ecommerce, orders, customers, transactions, retail).\n"
+        )
+        user_prompt = f"Requirement: {requirement}"
+        return [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+
+    def run(self, requirement: str) -> KeywordExtractResult:
+        messages = self._build_prompt(requirement=requirement)
+        payload = {"model": self.cfg.model, "messages": messages, "temperature": 0.2}
+        data = json.dumps(payload).encode("utf-8")
+
+        req = request.Request(
+            self._chat_completions_url(),
+            data=data,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.cfg.api_key}",
+            },
+        )
+
+        try:
+            with request.urlopen(req, timeout=60) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            return KeywordExtractResult(success=False, message=f"Keyword API HTTP error: {exc.code}, {detail}", keywords=[])
+        except UnicodeEncodeError:
+            return KeywordExtractResult(
+                success=False,
+                message=(
+                    "Keyword API request failed: header encoding error. "
+                    "Please ensure API Key and headers contain only ASCII characters."
+                ),
+                keywords=[],
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            return KeywordExtractResult(success=False, message=f"Keyword API request failed: {exc}", keywords=[])
+
+        try:
+            content = body["choices"][0]["message"]["content"]
+        except Exception:  # pylint: disable=broad-exception-caught
+            return KeywordExtractResult(success=False, message=f"Unexpected Keyword API response: {body}", keywords=[])
+
+        text = content.strip()
+        if not text:
+            return KeywordExtractResult(success=False, message="Keyword API returned empty response", keywords=[])
+
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                keywords = [str(k).strip() for k in parsed if str(k).strip()]
+                return KeywordExtractResult(success=True, message="Keywords extracted", keywords=keywords)
+        except Exception:
+            pass
+
+        return KeywordExtractResult(success=False, message="Keyword API returned invalid JSON array", keywords=[])
 
 
 class PythonExecutionAgent:
